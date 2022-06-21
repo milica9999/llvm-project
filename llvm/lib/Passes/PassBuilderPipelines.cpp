@@ -127,6 +127,7 @@
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
+#include "llvm/Transforms/Utils/myHelloWorld.h"
 
 using namespace llvm;
 
@@ -432,9 +433,10 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
   FPM.addPass(InstCombinePass());
-  if (Level == OptimizationLevel::O3)
+  if (Level == OptimizationLevel::O3){
     FPM.addPass(AggressiveInstCombinePass());
-
+    FPM.addPass(myHelloWorldPass());
+  }
   if (!Level.isOptimizingForSize())
     FPM.addPass(LibCallsShrinkWrapPass());
 
