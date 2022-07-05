@@ -455,7 +455,6 @@ static bool foldUnusualPatterns(Function &F, DominatorTree &DT,
   if (MadeChange)
     for (BasicBlock &BB : F)
       SimplifyInstructionsInBlock(&BB);
-
   return MadeChange;
 }
 
