@@ -443,7 +443,6 @@ static bool isCTTZTable(const ConstantDataArray &Table, uint64_t Mul,
         (((Mul << Element) & Mask.getZExtValue()) >> Shift) == i)
       Matched++;
   }
-  errs() << Matched << " == " << InputBits;
   return Matched == InputBits;
 }
 
@@ -501,48 +500,38 @@ static bool tryToRecognizeTableBasedCttz(Instruction &I) {
   LoadInst *LI = dyn_cast<LoadInst>(&I);
   if (!LI)
     return false;
-  errs() << "1\n";
   // TODO: Support opaque pointers.
   Type *PtrTy = LI->getPointerOperand()->getType();
   if (PtrTy->isOpaquePointerTy())
     return false;
-  errs() << "2\n";
   Type *ElType = LI->getPointerOperandType()->getNonOpaquePointerElementType();
   if (!ElType->isIntegerTy())
     return false;
-  errs() << "3\n";
   GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(LI->getPointerOperand());
   if (!GEP || !GEP->isInBounds() || GEP->getNumIndices() != 2)
     return false;
-  errs() << "4\n";
   // TODO: Support opaque pointers.
   Type *PointeeTy = GEP->getPointerOperand()->getType();
   if (PointeeTy->isOpaquePointerTy())
     return false;
-  errs() << "5\n";
   Type *GEPPointeeType =
       GEP->getPointerOperandType()->getNonOpaquePointerElementType();
   if (!GEPPointeeType->isArrayTy())
     return false;
-  errs() << "6\n";
   uint64_t ArraySize = GEPPointeeType->getArrayNumElements();
   if (ArraySize != 32 && ArraySize != 64)
     return false;
-  errs() << "7\n";
   User *GEPUser = dyn_cast<User>(GEP->getPointerOperand());
   if (!GEPUser)
     return false;
-  errs() << "8\n";
   ConstantDataArray *ConstData =
       dyn_cast<ConstantDataArray>(GEPUser->getOperand(0));
   if (!ConstData)
     return false;
-  errs() << "9\n";
   Value *Idx1 = GEP->idx_begin()->get();
   Constant *Zero = dyn_cast<Constant>(Idx1);
   if (!Zero || !Zero->isZeroValue())
     return false;
-  errs() << "10\n";
   Value *Idx2 = std::next(GEP->idx_begin())->get();
 
   bool ConstIsWide = !match(Idx2, m_ZExt(m_Value()));
@@ -557,20 +546,16 @@ static bool tryToRecognizeTableBasedCttz(Instruction &I) {
                                     m_ConstantInt(MulConst))),
                  m_ConstantInt(ShiftConst)))))
     return false;
-  errs() << "1\n";
   unsigned InputBits = ConstIsWide ? 64 : 32;
 
   // Shift should extract top 5..7 bits.
   if (ShiftConst < InputBits - 7 || ShiftConst > InputBits - 5)
     return false;
-  errs() << "11\n";
   Type *XType = X1->getType();
   if (!XType->isIntegerTy(InputBits))
     return false;
-  errs() << "12\n";
   if (!isCTTZTable(*ConstData, MulConst, ShiftConst, InputBits))
     return false;
-  errs() << "13\n";
   auto ZeroTableElem = ConstData->getElementAsInteger(0);
   bool DefinedForZero = ZeroTableElem == InputBits;
 
@@ -595,7 +580,6 @@ static bool tryToRecognizeTableBasedCttz(Instruction &I) {
   }
 
   LI->replaceAllUsesWith(ZExtOrTrunc);
-  errs() << "14\n";
   return true;
 }
 
