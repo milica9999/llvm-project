@@ -12,11 +12,11 @@ static const char u = 0;
 // CHECK: %conv = zext i8 %0 to i32
 // CHECK: ret i32 %conv
 int ntz_seals_alg(unsigned x) {
-  static char table[64] = {32, 0, 1,  12, 2,  6,  u,  13, 10, 4,  u,  u,  8,
-                           u,  u, 25, 31, 11, 5,  u,  u,  u,  u,  u,  30, u,
-                           u,  u, u,  23, u,  19, 3,  u,  7,  u,  u,  u,  u,
-                           14, u, u,  u,  u,  u,  21, 27, 15, 9,  u,  u,  24,
-                           u,  u, 20, 26, 29, u,  22, 18, 28, 17, 16, u};
+  static char table[64] = {32, 0,  1,  12, 2,  6,  u,  13, 3,  u,  7,  u, u,
+                           u,  u,  14, 10, 4,  u,  u,  8,  u,  u,  25, u, u,
+                           u,  u,  u,  21, 27, 15, 31, 11, 5,  u,  u,  u, u,
+                           u,  9,  u,  u,  24, u,  u,  20, 26, 30, u,  u, u,
+                           u,  23, u,  19, 29, u,  22, 18, 28, 17, 16, u};
   x = (x & -x) * 0x0450FBAF;
   return table[x >> 26];
 }
@@ -40,9 +40,9 @@ int ntz_seals_alg(unsigned x) {
 // CHECK: %retval.0 = phi i32 [ %conv, %if.end ], [ 32, %entry ]
 // CHECK: ret i32 %retval.0
 int ntz_deBruijn_cycle(unsigned x) {
-  static char table[32] = {0,  1,  2,  24, 3,  19, 6,  25, 31, 23, 18,
-                           5,  21, 9,  15, 11, 22, 4,  20, 10, 16, 7,
-                           12, 26, 30, 17, 8,  14, 29, 13, 28, 27};
+  static char table[32] = {0,  1,  2,  24, 3,  19, 6,  25, 22, 4,  20,
+                           10, 16, 7,  12, 26, 31, 23, 18, 5,  21, 9,
+                           15, 11, 30, 17, 8,  14, 29, 13, 28, 27};
   if (x == 0)
     return 32;
   x = (x & -x) * 0x04D7651F;
