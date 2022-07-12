@@ -1,4 +1,4 @@
-// RUN: clang -target riscv64-linux-unknown-elf -no-canonical-prefixes --gcc-toolchain=/home/syrmia/gcc/riscv-toolchain/install --sysroot=/home/syrmia/gcc/riscv-toolchain/install/sysroot -O2 -S %s -Xclang -no-opaque-pointers -emit-llvm -static -o - | opt -aggressive-instcombine -mtriple riscv64-linux-elf -S -o - | /home/syrmia/Desktop/llvm/llvm-project/build/bin/FileCheck %s
+// RUN: clang -target riscv64-linux-unknown-elf -no-canonical-prefixes --gcc-toolchain=/home/syrmia/gcc/INSTALL_DIR --sysroot=/home/syrmia/gcc/INSTALL_DIR/SYSROOT_DIR -O2 -S %s -Xclang -no-opaque-pointers -emit-llvm -static -o - | opt -aggressive-instcombine -mtriple riscv64-linux-elf -S -o - | /home/syrmia/Desktop/llvm/llvm-project/build/bin/FileCheck %s
 
 static const char u = 0;
 // CHECK: entry:
