@@ -18212,7 +18212,7 @@ static SDValue performSelectCombine(SDNode *N,
   SelectionDAG &DAG = DCI.DAG;
   SDValue N0 = N->getOperand(0);
   EVT ResVT = N->getValueType(0);
-
+  errs() << "PERFORMSELECTCOMBINE\n";
   if (N0.getOpcode() != ISD::SETCC)
     return SDValue();
 

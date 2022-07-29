@@ -3,6 +3,8 @@
 ; RUN:   | FileCheck %s -check-prefix=RV64I
 ; RUN: llc -mtriple=riscv64 -mattr=+zbb -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s -check-prefix=RV64ZBB
+; RUN: llc -mtriple=riscv64 -mattr=+zbb -verify-machineinstrs < %s \
+; RUN:   | FileCheck %s -check-prefix=RV64ZBBOPT
 
 declare i32 @llvm.ctlz.i32(i32, i1)
 
@@ -495,15 +497,10 @@ define signext i32 @findFirstSet_i32(i32 signext %a) nounwind {
 ; RV64I-NEXT:    addi sp, sp, 16
 ; RV64I-NEXT:    ret
 ;
-; RV64ZBB-LABEL: findFirstSet_i32:
-; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    mv a1, a0
-; RV64ZBB-NEXT:    li a0, -1
-; RV64ZBB-NEXT:    beqz a1, .LBB8_2
-; RV64ZBB-NEXT:  # %bb.1:
-; RV64ZBB-NEXT:    ctzw a0, a1
-; RV64ZBB-NEXT:  .LBB8_2:
-; RV64ZBB-NEXT:    ret
+; RV64ZBBOPT-LABEL: findFirstSet_i32:                 
+; RV64ZBBOPT:       # %bb.0:
+; RV64ZBBOPT-NEXT:    ctzw a0, a0
+; RV64ZBBOPT-NEXT:    ret
   %1 = call i32 @llvm.cttz.i32(i32 %a, i1 true)
   %2 = icmp eq i32 %a, 0
   %3 = select i1 %2, i32 -1, i32 %1
