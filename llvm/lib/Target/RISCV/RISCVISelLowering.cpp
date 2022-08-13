@@ -8497,7 +8497,7 @@ static SDValue performBITREVERSECombine(SDNode *N, SelectionDAG &DAG,
 
 static SDValue foldSelectofCTTZ(SDNode *N, SelectionDAG &DAG) {
   SDValue Zero, CTTZ;
-  Zero = N->getOperand(1);
+  Zero = N->getOperand(3);
   CTTZ = N->getOperand(4);
 
   if (CTTZ.getOpcode() != ISD::CTTZ && CTTZ.getOpcode() != RISCVISD::CTZW)
@@ -8505,10 +8505,10 @@ static SDValue foldSelectofCTTZ(SDNode *N, SelectionDAG &DAG) {
 
   assert((CTTZ.getValueType() == MVT::i32 || CTTZ.getValueType() == MVT::i64) &&
          "Illegal type in CTTZ folding");
-
+        
   if (!isNullConstant(Zero))
     return SDValue();
-
+    
   unsigned BitWidth = CTTZ.getValueSizeInBits();
   SDValue BitWidthMinusOne =
       DAG.getConstant(BitWidth - 1, SDLoc(N), CTTZ.getValueType());
