@@ -8505,11 +8505,15 @@ static SDValue foldSelectofCTTZ(SDNode *N, SelectionDAG &DAG) {
 
   assert((CTTZ.getValueType() == MVT::i32 || CTTZ.getValueType() == MVT::i64) &&
          "Illegal type in CTTZ folding");
-        
+
   if (!isNullConstant(Zero))
     return SDValue();
-    
+
   unsigned BitWidth = CTTZ.getValueSizeInBits();
+  if (CTTZ.getOpcode() == RISCVISD::CTZW) {
+    BitWidth = 32;
+  }
+
   SDValue BitWidthMinusOne =
       DAG.getConstant(BitWidth - 1, SDLoc(N), CTTZ.getValueType());
   return DAG.getNode(ISD::AND, SDLoc(N), CTTZ.getValueType(), CTTZ,
