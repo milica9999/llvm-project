@@ -891,8 +891,13 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   DebugifyEachInstrumentation Debugify;
   DebugInfoPerPass DebugInfoBeforePass;
   if (CodeGenOpts.EnableDIPreservationVerify) {
-    Debugify.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
     Debugify.setDebugInfoBeforePass(DebugInfoBeforePass);
+    if (!CodeGenOpts.DebugifyMetadataKind.empty() && !((StringRef)CodeGenOpts.DebugifyMetadataKind).equals("dbg")) {
+      Debugify.setDebugifyMode(DebugifyMode::OriginalMetadata);
+      Debugify.setMetadataKind(CodeGenOpts.DebugifyMetadataKind);
+    } else {
+      Debugify.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
+    }
 
     if (!CodeGenOpts.DIBugsReportFilePath.empty())
       Debugify.setOrigDIVerifyBugsReportFilePath(

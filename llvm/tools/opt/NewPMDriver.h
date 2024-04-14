@@ -36,6 +36,7 @@ extern cl::opt<std::string> DebugifyExport;
 
 extern cl::opt<bool> VerifyEachDebugInfoPreserve;
 extern cl::opt<std::string> VerifyDIPreserveExport;
+extern cl::opt<std::string> DebugifyMetadataKind;
 
 namespace opt_tool {
 enum OutputKind {

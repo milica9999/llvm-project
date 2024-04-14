@@ -218,6 +218,9 @@ public:
   /// debug info.
   std::string DIBugsReportFilePath;
 
+  /// The metadata kind to set for Debugify
+  std::string DebugifyMetadataKind;
+
   /// The floating-point denormal mode to use.
   llvm::DenormalMode FPDenormalMode = llvm::DenormalMode::getIEEE();
 

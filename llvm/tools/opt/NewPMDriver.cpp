@@ -64,6 +64,10 @@ cl::opt<std::string>
                             " append mode to insert new JSON objects)"),
                    cl::value_desc("filename"), cl::init(""));
 
+cl::opt<std::string> DebugifyMetadataKind("debugify-metadata-kind",
+                                          cl::desc("Set meta data kind."),
+                                          cl::init("dbg"));
+
 } // namespace llvm
 
 enum class DebugLogging { None, Normal, Verbose, Quiet };
@@ -425,9 +429,13 @@ bool llvm::runPassPipeline(
     Debugify.registerCallbacks(PIC, MAM);
   } else if (VerifyEachDebugInfoPreserve) {
     Debugify.setDebugInfoBeforePass(DebugInfoBeforePass);
-    Debugify.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
-    Debugify.setOrigDIVerifyBugsReportFilePath(
-      VerifyDIPreserveExport);
+    if (!((StringRef)DebugifyMetadataKind).equals("dbg")) {
+      Debugify.setDebugifyMode(DebugifyMode::OriginalMetadata);
+      Debugify.setMetadataKind((StringRef)DebugifyMetadataKind);
+    } else {
+      Debugify.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
+    }
+    Debugify.setOrigDIVerifyBugsReportFilePath(VerifyDIPreserveExport);
     Debugify.registerCallbacks(PIC, MAM);
   }
 
@@ -475,9 +483,14 @@ bool llvm::runPassPipeline(
   ModulePassManager MPM;
   if (EnableDebugify)
     MPM.addPass(NewPMDebugifyPass());
-  if (VerifyDIPreserve)
-    MPM.addPass(NewPMDebugifyPass(DebugifyMode::OriginalDebugInfo, "",
-                                  &DebugInfoBeforePass));
+  if (VerifyDIPreserve) {
+    auto Mode = DebugifyMode::OriginalDebugInfo;
+    if (!((StringRef)DebugifyMetadataKind).equals("dbg")) {
+      Mode = DebugifyMode::OriginalMetadata;
+    }
+    MPM.addPass(NewPMDebugifyPass(Mode, "", &DebugInfoBeforePass,
+                                  (StringRef)DebugifyMetadataKind));
+  }
 
   // Add passes according to the -passes options.
   if (!PassPipeline.empty()) {
@@ -491,10 +504,15 @@ bool llvm::runPassPipeline(
     MPM.addPass(VerifierPass());
   if (EnableDebugify)
     MPM.addPass(NewPMCheckDebugifyPass(false, "", &DIStatsMap));
-  if (VerifyDIPreserve)
+  if (VerifyDIPreserve) {
+    auto Mode = DebugifyMode::OriginalDebugInfo;
+    if (!((StringRef)DebugifyMetadataKind).equals("dbg")) {
+      Mode = DebugifyMode::OriginalMetadata;
+    }
     MPM.addPass(NewPMCheckDebugifyPass(
-        false, "", nullptr, DebugifyMode::OriginalDebugInfo,
-        &DebugInfoBeforePass, VerifyDIPreserveExport));
+        false, "", nullptr, Mode, &DebugInfoBeforePass, VerifyDIPreserveExport,
+        (StringRef)DebugifyMetadataKind));
+  }
 
   // Add any relevant output pass at the end of the pipeline.
   switch (OK) {

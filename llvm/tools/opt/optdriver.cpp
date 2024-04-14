@@ -771,8 +771,13 @@ extern "C" int optMain(
     Passes.setDebugifyMode(DebugifyMode::SyntheticDebugInfo);
     Passes.setDIStatsMap(DIStatsMap);
   } else if (VerifyEachDebugInfoPreserve) {
-    Passes.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
     Passes.setDebugInfoBeforePass(DebugInfoBeforePass);
+    if (!((StringRef)DebugifyMetadataKind).equals("dbg")) {
+      Passes.setDebugifyMode(DebugifyMode::OriginalMetadata);
+      Passes.setMetadataKind((StringRef)DebugifyMetadataKind);
+    } else {
+      Passes.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
+    }
     if (!VerifyDIPreserveExport.empty())
       Passes.setOrigDIVerifyBugsReportFilePath(VerifyDIPreserveExport);
   }
@@ -793,8 +798,14 @@ extern "C" int optMain(
       Passes.add(createDebugifyModulePass());
     } else if (VerifyDebugInfoPreserve) {
       Passes.setDebugInfoBeforePass(DebugInfoBeforePass);
-      Passes.add(createDebugifyModulePass(DebugifyMode::OriginalDebugInfo, "",
-                                          &(Passes.getDebugInfoPerPass())));
+      if (!((StringRef)DebugifyMetadataKind).equals("dbg")) {
+        Passes.add(createDebugifyModulePass(DebugifyMode::OriginalMetadata, "",
+                                            &(Passes.getDebugInfoPerPass()),
+                                            (StringRef)DebugifyMetadataKind));
+      } else {
+        Passes.add(createDebugifyModulePass(DebugifyMode::OriginalDebugInfo, "",
+                                            &(Passes.getDebugInfoPerPass())));
+      }
     }
   }
 
@@ -832,9 +843,16 @@ extern "C" int optMain(
     else if (VerifyDebugInfoPreserve) {
       if (!VerifyDIPreserveExport.empty())
         Passes.setOrigDIVerifyBugsReportFilePath(VerifyDIPreserveExport);
-      Passes.add(createCheckDebugifyModulePass(
-          false, "", nullptr, DebugifyMode::OriginalDebugInfo,
-          &(Passes.getDebugInfoPerPass()), VerifyDIPreserveExport));
+      if (!((StringRef)DebugifyMetadataKind).equals("dbg")) {
+        Passes.add(createCheckDebugifyModulePass(
+            false, "", nullptr, DebugifyMode::OriginalMetadata,
+            &(Passes.getDebugInfoPerPass()), VerifyDIPreserveExport,
+            (StringRef)DebugifyMetadataKind));
+      } else {
+        Passes.add(createCheckDebugifyModulePass(
+            false, "", nullptr, DebugifyMode::OriginalDebugInfo,
+            &(Passes.getDebugInfoPerPass()), VerifyDIPreserveExport));
+      }
     }
   }
 

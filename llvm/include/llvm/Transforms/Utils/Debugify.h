@@ -30,16 +30,18 @@ using DebugVarMap = llvm::MapVector<const llvm::DILocalVariable *, unsigned>;
 using WeakInstValueMap =
     llvm::MapVector<const llvm::Instruction *, llvm::WeakVH>;
 
-/// Used to track the Debug Info Metadata information.
+/// Used to track the Debug Info Metadata or Metadata information.
 struct DebugInfoPerPass {
   // This maps a function name to its associated DISubprogram.
   DebugFnMap DIFunctions;
-  // This maps an instruction and the info about whether it has !dbg attached.
-  DebugInstMap DILocations;
+  // This maps an instruction and the info about whether it has !dbg/metadata
+  // attached.
+  DebugInstMap MDNodes;
   // This tracks value (instruction) deletion. If an instruction gets deleted,
   // WeakVH nulls itself.
   WeakInstValueMap InstToDelete;
-  // Maps variable into dbg users (#dbg values/declares for this variable).
+  // Only used for OriginalDebugInfo mode: Maps variable into dbg users (#dbg
+  // values/declares for this variable).
   DebugVarMap DIVariables;
 };
 
@@ -63,55 +65,69 @@ bool applyDebugifyMetadata(
 /// Returns true if any change was made.
 bool stripDebugifyMetadata(Module &M);
 
-/// Collect original debug information before a pass.
+/// Collect original debug information or attached metadata before a pass.
 ///
-/// \param M The module to collect debug information from.
-/// \param Functions A range of functions to collect debug information from.
-/// \param DebugInfoBeforePass DI metadata before a pass.
-/// \param Banner A prefix string to add to debug/error messages.
-/// \param NameOfWrappedPass A name of a pass to add to debug/error messages.
+/// \param M The module to collect debug information or metadat from.
+/// \param Functions A range of functions to collect debug information or
+/// metadat from. \param DebugInfoBeforePass DI metadata before a pass. \param
+/// Banner A prefix string to add to debug/error messages. \param
+/// NameOfWrappedPass A name of a pass to add to debug/error messages. \param
+/// MetadataKind A name of metadata kind to search for.
 bool collectDebugInfoMetadata(Module &M,
                               iterator_range<Module::iterator> Functions,
                               DebugInfoPerPass &DebugInfoBeforePass,
-                              StringRef Banner, StringRef NameOfWrappedPass);
+                              StringRef Banner, StringRef NameOfWrappedPass,
+                              StringRef MetadataKind = "dbg");
 
 /// Check original debug information after a pass.
 ///
-/// \param M The module to collect debug information from.
-/// \param Functions A range of functions to collect debug information from.
-/// \param DebugInfoBeforePass DI metadata before a pass.
-/// \param Banner A prefix string to add to debug/error messages.
-/// \param NameOfWrappedPass A name of a pass to add to debug/error messages.
+/// \param M The module to collect debug information or metadat from.
+/// \param Functions A range of functions to collect debug information or
+/// metadata from. \param DebugInfoBeforePass DI metadata before a pass. \param
+/// Banner A prefix string to add to debug/error messages. \param
+/// NameOfWrappedPass A name of a pass to add to debug/error messages. \param
+/// MetadataKind A name of metadata kind to search for.
 bool checkDebugInfoMetadata(Module &M,
                             iterator_range<Module::iterator> Functions,
                             DebugInfoPerPass &DebugInfoBeforePass,
                             StringRef Banner, StringRef NameOfWrappedPass,
-                            StringRef OrigDIVerifyBugsReportFilePath);
+                            StringRef OrigDIVerifyBugsReportFilePath,
+                            StringRef MetadataKind = "dbg");
 } // namespace llvm
 
 /// Used to check whether we track synthetic or original debug info.
-enum class DebugifyMode { NoDebugify, SyntheticDebugInfo, OriginalDebugInfo };
+enum class DebugifyMode {
+  NoDebugify,
+  SyntheticDebugInfo,
+  OriginalDebugInfo,
+  OriginalMetadata
+};
 
 llvm::ModulePass *createDebugifyModulePass(
     enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
     llvm::StringRef NameOfWrappedPass = "",
-    DebugInfoPerPass *DebugInfoBeforePass = nullptr);
+    DebugInfoPerPass *DebugInfoBeforePass = nullptr,
+    llvm::StringRef MetadataKind = "dbg");
 llvm::FunctionPass *createDebugifyFunctionPass(
     enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
     llvm::StringRef NameOfWrappedPass = "",
-    DebugInfoPerPass *DebugInfoBeforePass = nullptr);
+    DebugInfoPerPass *DebugInfoBeforePass = nullptr,
+    llvm::StringRef MetadataKind = "dbg");
 
 class NewPMDebugifyPass : public llvm::PassInfoMixin<NewPMDebugifyPass> {
   llvm::StringRef NameOfWrappedPass;
   DebugInfoPerPass *DebugInfoBeforePass = nullptr;
   enum DebugifyMode Mode = DebugifyMode::NoDebugify;
+  llvm::StringRef MetadataKind = "dbg";
+
 public:
-  NewPMDebugifyPass(
-      enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
-      llvm::StringRef NameOfWrappedPass = "",
-      DebugInfoPerPass *DebugInfoBeforePass = nullptr)
+  NewPMDebugifyPass(enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
+                    llvm::StringRef NameOfWrappedPass = "",
+                    DebugInfoPerPass *DebugInfoBeforePass = nullptr,
+                    llvm::StringRef MetadataKind = "dbg")
       : NameOfWrappedPass(NameOfWrappedPass),
-        DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode) {}
+        DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode),
+        MetadataKind(MetadataKind) {}
 
   llvm::PreservedAnalyses run(llvm::Module &M, llvm::ModuleAnalysisManager &AM);
 };
@@ -150,14 +166,16 @@ llvm::ModulePass *createCheckDebugifyModulePass(
     DebugifyStatsMap *StatsMap = nullptr,
     enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
     DebugInfoPerPass *DebugInfoBeforePass = nullptr,
-    llvm::StringRef OrigDIVerifyBugsReportFilePath = "");
+    llvm::StringRef OrigDIVerifyBugsReportFilePath = "",
+    llvm::StringRef MetadataKind = "dbg");
 
 llvm::FunctionPass *createCheckDebugifyFunctionPass(
     bool Strip = false, llvm::StringRef NameOfWrappedPass = "",
     DebugifyStatsMap *StatsMap = nullptr,
     enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
     DebugInfoPerPass *DebugInfoBeforePass = nullptr,
-    llvm::StringRef OrigDIVerifyBugsReportFilePath = "");
+    llvm::StringRef OrigDIVerifyBugsReportFilePath = "",
+    llvm::StringRef MetadataKind = "dbg");
 
 class NewPMCheckDebugifyPass
     : public llvm::PassInfoMixin<NewPMCheckDebugifyPass> {
@@ -167,17 +185,20 @@ class NewPMCheckDebugifyPass
   DebugInfoPerPass *DebugInfoBeforePass;
   enum DebugifyMode Mode;
   bool Strip;
+  llvm::StringRef MetadataKind;
+
 public:
   NewPMCheckDebugifyPass(
       bool Strip = false, llvm::StringRef NameOfWrappedPass = "",
       DebugifyStatsMap *StatsMap = nullptr,
       enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
       DebugInfoPerPass *DebugInfoBeforePass = nullptr,
-      llvm::StringRef OrigDIVerifyBugsReportFilePath = "")
+      llvm::StringRef OrigDIVerifyBugsReportFilePath = "",
+      llvm::StringRef MetadataKind = "dbg")
       : NameOfWrappedPass(NameOfWrappedPass),
         OrigDIVerifyBugsReportFilePath(OrigDIVerifyBugsReportFilePath),
-        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode),
-        Strip(Strip) {}
+        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass),
+        Mode(Mode), Strip(Strip), MetadataKind(MetadataKind) {}
 
   llvm::PreservedAnalyses run(llvm::Module &M, llvm::ModuleAnalysisManager &AM);
 };
@@ -189,6 +210,7 @@ class DebugifyEachInstrumentation {
   llvm::StringRef OrigDIVerifyBugsReportFilePath = "";
   DebugInfoPerPass *DebugInfoBeforePass = nullptr;
   enum DebugifyMode Mode = DebugifyMode::NoDebugify;
+  llvm::StringRef MetadataKind = "dbg";
   DebugifyStatsMap *DIStatsMap = nullptr;
 
 public:
@@ -197,7 +219,7 @@ public:
   // Used within DebugifyMode::SyntheticDebugInfo mode.
   void setDIStatsMap(DebugifyStatsMap &StatMap) { DIStatsMap = &StatMap; }
   const DebugifyStatsMap &getDebugifyStatsMap() const { return *DIStatsMap; }
-  // Used within DebugifyMode::OriginalDebugInfo mode.
+  // Used within DebugifyMode::OriginalDebugInfo/OriginalMetadata mode.
   void setDebugInfoBeforePass(DebugInfoPerPass &PerPassMap) {
     DebugInfoBeforePass = &PerPassMap;
   }
@@ -212,11 +234,16 @@ public:
 
   void setDebugifyMode(enum DebugifyMode M) { Mode = M; }
 
+  void setMetadataKind(llvm::StringRef Kind) { MetadataKind = Kind; }
+
   bool isSyntheticDebugInfo() const {
     return Mode == DebugifyMode::SyntheticDebugInfo;
   }
   bool isOriginalDebugInfoMode() const {
     return Mode == DebugifyMode::OriginalDebugInfo;
+  }
+  bool isOriginalMetadata() const {
+    return Mode == DebugifyMode::OriginalMetadata;
   }
 };
 
@@ -229,6 +256,7 @@ class DebugifyCustomPassManager : public legacy::PassManager {
   DebugifyStatsMap *DIStatsMap = nullptr;
   DebugInfoPerPass *DebugInfoBeforePass = nullptr;
   enum DebugifyMode Mode = DebugifyMode::NoDebugify;
+  StringRef MetadataKind = "dbg";
 
 public:
   using super = legacy::PassManager;
@@ -253,18 +281,20 @@ public:
     // TODO: Implement Debugify for LoopPass.
     switch (Kind) {
     case PT_Function:
-      super::add(createDebugifyFunctionPass(Mode, Name, DebugInfoBeforePass));
+      super::add(createDebugifyFunctionPass(Mode, Name, DebugInfoBeforePass,
+                                            MetadataKind));
       super::add(P);
       super::add(createCheckDebugifyFunctionPass(
           isSyntheticDebugInfo(), Name, DIStatsMap, Mode, DebugInfoBeforePass,
-          OrigDIVerifyBugsReportFilePath));
+          OrigDIVerifyBugsReportFilePath, MetadataKind));
       break;
     case PT_Module:
-      super::add(createDebugifyModulePass(Mode, Name, DebugInfoBeforePass));
+      super::add(createDebugifyModulePass(Mode, Name, DebugInfoBeforePass,
+                                          MetadataKind));
       super::add(P);
       super::add(createCheckDebugifyModulePass(
           isSyntheticDebugInfo(), Name, DIStatsMap, Mode, DebugInfoBeforePass,
-          OrigDIVerifyBugsReportFilePath));
+          OrigDIVerifyBugsReportFilePath, MetadataKind));
       break;
     default:
       super::add(P);
@@ -274,7 +304,7 @@ public:
 
   // Used within DebugifyMode::SyntheticDebugInfo mode.
   void setDIStatsMap(DebugifyStatsMap &StatMap) { DIStatsMap = &StatMap; }
-  // Used within DebugifyMode::OriginalDebugInfo mode.
+  // Used within DebugifyMode::OriginalDebugInfo/OriginalMetadata mode.
   void setDebugInfoBeforePass(DebugInfoPerPass &PerPassDI) {
     DebugInfoBeforePass = &PerPassDI;
   }
@@ -287,11 +317,16 @@ public:
 
   void setDebugifyMode(enum DebugifyMode M) { Mode = M; }
 
+  void setMetadataKind(StringRef Kind) { MetadataKind = Kind; }
+
   bool isSyntheticDebugInfo() const {
     return Mode == DebugifyMode::SyntheticDebugInfo;
   }
   bool isOriginalDebugInfoMode() const {
     return Mode == DebugifyMode::OriginalDebugInfo;
+  }
+  bool isOriginalMetadataMode() const {
+    return Mode == DebugifyMode::OriginalMetadata;
   }
 
   const DebugifyStatsMap &getDebugifyStatsMap() const { return *DIStatsMap; }

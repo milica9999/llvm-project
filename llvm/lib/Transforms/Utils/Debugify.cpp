@@ -220,33 +220,41 @@ bool llvm::applyDebugifyMetadata(
   return true;
 }
 
-static bool
-applyDebugify(Function &F,
-              enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
-              DebugInfoPerPass *DebugInfoBeforePass = nullptr,
-              StringRef NameOfWrappedPass = "") {
+static bool applyDebugify(
+    Function &F, enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
+    DebugInfoPerPass *DebugInfoBeforePass = nullptr,
+    StringRef NameOfWrappedPass = "", StringRef MetadataKind = "dbg") {
   Module &M = *F.getParent();
   auto FuncIt = F.getIterator();
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     return applyDebugifyMetadata(M, make_range(FuncIt, std::next(FuncIt)),
                                  "FunctionDebugify: ", /*ApplyToMF*/ nullptr);
   assert(DebugInfoBeforePass);
-  return collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
-                                  "FunctionDebugify (original debuginfo)",
-                                  NameOfWrappedPass);
+  if (Mode == DebugifyMode::OriginalDebugInfo)
+    return collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                                    "FunctionDebugify (original debuginfo)",
+                                    NameOfWrappedPass);
+  else
+    return collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                                    "FunctionDebugify (original metadata)",
+                                    NameOfWrappedPass, MetadataKind);
 }
 
-static bool
-applyDebugify(Module &M,
-              enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
-              DebugInfoPerPass *DebugInfoBeforePass = nullptr,
-              StringRef NameOfWrappedPass = "") {
+static bool applyDebugify(
+    Module &M, enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
+    DebugInfoPerPass *DebugInfoBeforePass = nullptr,
+    StringRef NameOfWrappedPass = "", StringRef MetadataKind = "dbg") {
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     return applyDebugifyMetadata(M, M.functions(),
                                  "ModuleDebugify: ", /*ApplyToMF*/ nullptr);
-  return collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
-                                  "ModuleDebugify (original debuginfo)",
-                                  NameOfWrappedPass);
+  else if (Mode == DebugifyMode::OriginalDebugInfo)
+    return collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                                    "ModuleDebugify (original debuginfo)",
+                                    NameOfWrappedPass);
+  else
+    return collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                                    "ModuleDebugify (original metadata)",
+                                    NameOfWrappedPass, MetadataKind);
 }
 
 bool llvm::stripDebugifyMetadata(Module &M) {
@@ -303,10 +311,13 @@ bool llvm::collectDebugInfoMetadata(Module &M,
                                     iterator_range<Module::iterator> Functions,
                                     DebugInfoPerPass &DebugInfoBeforePass,
                                     StringRef Banner,
-                                    StringRef NameOfWrappedPass) {
+                                    StringRef NameOfWrappedPass,
+                                    StringRef MetadataKind) {
   LLVM_DEBUG(dbgs() << Banner << ": (before) " << NameOfWrappedPass << '\n');
 
-  if (!M.getNamedMetadata("llvm.dbg.cu")) {
+  bool IsDbg = MetadataKind.equals("dbg");
+
+  if (IsDbg && !M.getNamedMetadata("llvm.dbg.cu")) {
     dbg() << Banner << ": Skipping module without debug info\n";
     return false;
   }
@@ -331,7 +342,7 @@ bool llvm::collectDebugInfoMetadata(Module &M,
     // Collect the DISubprogram.
     auto *SP = F.getSubprogram();
     DebugInfoBeforePass.DIFunctions.insert({&F, SP});
-    if (SP) {
+    if (SP && IsDbg) {
       LLVM_DEBUG(dbgs() << "  Collecting subprogram: " << *SP << '\n');
       for (const DINode *DN : SP->getRetainedNodes()) {
         if (const auto *DV = dyn_cast<DILocalVariable>(DN)) {
@@ -348,7 +359,7 @@ bool llvm::collectDebugInfoMetadata(Module &M,
           continue;
 
         // Cllect dbg.values and dbg.declare.
-        if (DebugifyLevel > Level::Locations) {
+        if (IsDbg && DebugifyLevel > Level::Locations) {
           if (auto *DVI = dyn_cast<DbgVariableIntrinsic>(&I)) {
             if (!SP)
               continue;
@@ -366,15 +377,15 @@ bool llvm::collectDebugInfoMetadata(Module &M,
         }
 
         // Skip debug instructions other than dbg.value and dbg.declare.
-        if (isa<DbgInfoIntrinsic>(&I))
+        if (IsDbg && isa<DbgInfoIntrinsic>(&I))
           continue;
 
         LLVM_DEBUG(dbgs() << "  Collecting info for inst: " << I << '\n');
         DebugInfoBeforePass.InstToDelete.insert({&I, &I});
 
-        const DILocation *Loc = I.getDebugLoc().get();
+        MDNode *Loc = I.getMetadata(MetadataKind);
         bool HasLoc = Loc != nullptr;
-        DebugInfoBeforePass.DILocations.insert({&I, HasLoc});
+        DebugInfoBeforePass.MDNodes.insert({&I, HasLoc});
       }
     }
   }
@@ -385,7 +396,8 @@ bool llvm::collectDebugInfoMetadata(Module &M,
   return true;
 }
 
-// This checks the preservation of original debug info attached to functions.
+// This checks the preservation of original debug info/metadata attached to
+// functions.
 static bool checkFunctions(const DebugFnMap &DIFunctionsBefore,
                            const DebugFnMap &DIFunctionsAfter,
                            StringRef NameOfWrappedPass,
@@ -426,17 +438,18 @@ static bool checkFunctions(const DebugFnMap &DIFunctionsBefore,
   return Preserved;
 }
 
-// This checks the preservation of the original debug info attached to
+// This checks the preservation of the original debug info/metadata attached to
 // instructions.
-static bool checkInstructions(const DebugInstMap &DILocsBefore,
-                              const DebugInstMap &DILocsAfter,
+static bool checkInstructions(const DebugInstMap &MDNodesBefore,
+                              const DebugInstMap &MDNodesAfter,
                               const WeakInstValueMap &InstToDelete,
                               StringRef NameOfWrappedPass,
                               StringRef FileNameFromCU,
-                              bool ShouldWriteIntoJSON,
-                              llvm::json::Array &Bugs) {
+                              bool ShouldWriteIntoJSON, llvm::json::Array &Bugs,
+                              StringRef MetadataKind) {
+  StringRef MDNodeType = MetadataKind.equals("dbg") ? "DILocation" : "Metadata location";
   bool Preserved = true;
-  for (const auto &L : DILocsAfter) {
+  for (const auto &L : MDNodesAfter) {
     if (L.second)
       continue;
     auto Instr = L.first;
@@ -452,34 +465,33 @@ static bool checkInstructions(const DebugInstMap &DILocsBefore,
     auto BBName = BB->hasName() ? BB->getName() : "no-name";
     auto InstName = Instruction::getOpcodeName(Instr->getOpcode());
 
-    auto InstrIt = DILocsBefore.find(Instr);
-    if (InstrIt == DILocsBefore.end()) {
+    auto InstrIt = MDNodesBefore.find(Instr);
+    if (InstrIt == MDNodesBefore.end()) {
       if (ShouldWriteIntoJSON)
-        Bugs.push_back(llvm::json::Object({{"metadata", "DILocation"},
+        Bugs.push_back(llvm::json::Object({{"metadata", MDNodeType},
                                            {"fn-name", FnName.str()},
                                            {"bb-name", BBName.str()},
                                            {"instr", InstName},
                                            {"action", "not-generate"}}));
       else
-        dbg() << "WARNING: " << NameOfWrappedPass
-              << " did not generate DILocation for " << *Instr
-              << " (BB: " << BBName << ", Fn: " << FnName
-              << ", File: " << FileNameFromCU << ")\n";
+        dbg() << "WARNING: " << NameOfWrappedPass << " did not generate "
+              << MDNodeType << " for " << *Instr << " (BB: " << BBName
+              << ", Fn: " << FnName << ", File: " << FileNameFromCU << ")\n";
       Preserved = false;
     } else {
       if (!InstrIt->second)
         continue;
-      // If the instr had the !dbg attached before the pass, consider it as
-      // a debug info issue.
+      // In case of OriginalDebugInfo mode If the instr had the !dbg attached
+      // before the pass, consider it as a debug info issue.
       if (ShouldWriteIntoJSON)
-        Bugs.push_back(llvm::json::Object({{"metadata", "DILocation"},
+        Bugs.push_back(llvm::json::Object({{"metadata", MDNodeType},
                                            {"fn-name", FnName.str()},
                                            {"bb-name", BBName.str()},
                                            {"instr", InstName},
                                            {"action", "drop"}}));
       else
-        dbg() << "WARNING: " << NameOfWrappedPass << " dropped DILocation of "
-              << *Instr << " (BB: " << BBName << ", Fn: " << FnName
+        dbg() << "WARNING: " << NameOfWrappedPass << " dropped " << MDNodeType
+              << " of " << *Instr << " (BB: " << BBName << ", Fn: " << FnName
               << ", File: " << FileNameFromCU << ")\n";
       Preserved = false;
     }
@@ -553,10 +565,13 @@ bool llvm::checkDebugInfoMetadata(Module &M,
                                   iterator_range<Module::iterator> Functions,
                                   DebugInfoPerPass &DebugInfoBeforePass,
                                   StringRef Banner, StringRef NameOfWrappedPass,
-                                  StringRef OrigDIVerifyBugsReportFilePath) {
+                                  StringRef OrigDIVerifyBugsReportFilePath,
+                                  StringRef MetadataKind) {
   LLVM_DEBUG(dbgs() << Banner << ": (after) " << NameOfWrappedPass << '\n');
 
-  if (!M.getNamedMetadata("llvm.dbg.cu")) {
+  bool IsDbg = MetadataKind.equals("dbg");
+
+  if (IsDbg && !M.getNamedMetadata("llvm.dbg.cu")) {
     dbg() << Banner << ": Skipping module without debug info\n";
     return false;
   }
@@ -581,7 +596,7 @@ bool llvm::checkDebugInfoMetadata(Module &M,
     auto *SP = F.getSubprogram();
     DebugInfoAfterPass.DIFunctions.insert({&F, SP});
 
-    if (SP) {
+    if (SP && IsDbg) {
       LLVM_DEBUG(dbgs() << "  Collecting subprogram: " << *SP << '\n');
       for (const DINode *DN : SP->getRetainedNodes()) {
         if (const auto *DV = dyn_cast<DILocalVariable>(DN)) {
@@ -591,14 +606,17 @@ bool llvm::checkDebugInfoMetadata(Module &M,
     }
 
     for (BasicBlock &BB : F) {
-      // Collect debug locations (!dbg) and debug variable intrinsics.
+      // In case of OriginalDebugInfo mode collect debug locations (!dbg) and
+      // debug variable intrinsics. In case of OriginalMetadata mode collect
+      // metadata
       for (Instruction &I : BB) {
         // Skip PHIs.
         if (isa<PHINode>(I))
           continue;
 
-        // Collect dbg.values and dbg.declares.
-        if (DebugifyLevel > Level::Locations) {
+        // In case of OriginalDebugInfo mode collect dbg.values and
+        // dbg.declares.
+        if (IsDbg && DebugifyLevel > Level::Locations) {
           if (auto *DVI = dyn_cast<DbgVariableIntrinsic>(&I)) {
             if (!SP)
               continue;
@@ -615,30 +633,30 @@ bool llvm::checkDebugInfoMetadata(Module &M,
           }
         }
 
-        // Skip debug instructions other than dbg.value and dbg.declare.
-        if (isa<DbgInfoIntrinsic>(&I))
+        // In case of OriginalDebugInfo mode skip debug instructions other than
+        // dbg.value and dbg.declare.
+        if (IsDbg && isa<DbgInfoIntrinsic>(&I))
           continue;
 
         LLVM_DEBUG(dbgs() << "  Collecting info for inst: " << I << '\n');
 
-        const DILocation *Loc = I.getDebugLoc().get();
+        MDNode *Loc = I.getMetadata(MetadataKind);
         bool HasLoc = Loc != nullptr;
-
-        DebugInfoAfterPass.DILocations.insert({&I, HasLoc});
+        DebugInfoAfterPass.MDNodes.insert({&I, HasLoc});
       }
     }
   }
 
   // TODO: The name of the module could be read better?
+  auto *DbgCu = M.getNamedMetadata("llvm.dbg.cu");
   StringRef FileNameFromCU =
-      (cast<DICompileUnit>(M.getNamedMetadata("llvm.dbg.cu")->getOperand(0)))
-          ->getFilename();
+      DbgCu ? (cast<DICompileUnit>(DbgCu->getOperand(0)))->getFilename() : "";
 
   auto DIFunctionsBefore = DebugInfoBeforePass.DIFunctions;
   auto DIFunctionsAfter = DebugInfoAfterPass.DIFunctions;
 
-  auto DILocsBefore = DebugInfoBeforePass.DILocations;
-  auto DILocsAfter = DebugInfoAfterPass.DILocations;
+  auto MDNodesBefore = DebugInfoBeforePass.MDNodes;
+  auto MDNodesAfter = DebugInfoAfterPass.MDNodes;
 
   auto InstToDelete = DebugInfoBeforePass.InstToDelete;
 
@@ -652,11 +670,13 @@ bool llvm::checkDebugInfoMetadata(Module &M,
       checkFunctions(DIFunctionsBefore, DIFunctionsAfter, NameOfWrappedPass,
                      FileNameFromCU, ShouldWriteIntoJSON, Bugs);
   bool ResultForInsts = checkInstructions(
-      DILocsBefore, DILocsAfter, InstToDelete, NameOfWrappedPass,
-      FileNameFromCU, ShouldWriteIntoJSON, Bugs);
+      MDNodesBefore, MDNodesAfter, InstToDelete, NameOfWrappedPass,
+      FileNameFromCU, ShouldWriteIntoJSON, Bugs, MetadataKind);
 
-  bool ResultForVars = checkVars(DIVarsBefore, DIVarsAfter, NameOfWrappedPass,
-                                 FileNameFromCU, ShouldWriteIntoJSON, Bugs);
+  bool ResultForVars =
+      IsDbg ? checkVars(DIVarsBefore, DIVarsAfter, NameOfWrappedPass,
+                        FileNameFromCU, ShouldWriteIntoJSON, Bugs)
+            : true;
 
   bool Result = ResultForFunc && ResultForInsts && ResultForVars;
 
@@ -831,15 +851,18 @@ bool checkDebugifyMetadata(Module &M,
 struct DebugifyModulePass : public ModulePass {
   bool runOnModule(Module &M) override {
     bool Result =
-        applyDebugify(M, Mode, DebugInfoBeforePass, NameOfWrappedPass);
+        applyDebugify(M, Mode, DebugInfoBeforePass, NameOfWrappedPass,
+                                MetadataKind);
     return Result;
   }
 
   DebugifyModulePass(enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
                      StringRef NameOfWrappedPass = "",
-                     DebugInfoPerPass *DebugInfoBeforePass = nullptr)
+                     DebugInfoPerPass *DebugInfoBeforePass = nullptr,
+                     StringRef MetadataKind = "dbg")
       : ModulePass(ID), NameOfWrappedPass(NameOfWrappedPass),
-        DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode) {}
+        DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode),
+        MetadataKind(MetadataKind) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
@@ -851,6 +874,7 @@ private:
   StringRef NameOfWrappedPass;
   DebugInfoPerPass *DebugInfoBeforePass;
   enum DebugifyMode Mode;
+  StringRef MetadataKind;
 };
 
 /// FunctionPass for attaching synthetic debug info to instructions within a
@@ -858,16 +882,19 @@ private:
 struct DebugifyFunctionPass : public FunctionPass {
   bool runOnFunction(Function &F) override {
     bool Result =
-        applyDebugify(F, Mode, DebugInfoBeforePass, NameOfWrappedPass);
+        applyDebugify(F, Mode, DebugInfoBeforePass, NameOfWrappedPass,
+                                MetadataKind);
     return Result;
   }
 
   DebugifyFunctionPass(
       enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
       StringRef NameOfWrappedPass = "",
-      DebugInfoPerPass *DebugInfoBeforePass = nullptr)
+      DebugInfoPerPass *DebugInfoBeforePass = nullptr,
+      StringRef MetadataKind = "dbg")
       : FunctionPass(ID), NameOfWrappedPass(NameOfWrappedPass),
-        DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode) {}
+        DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode),
+        MetadataKind(MetadataKind) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
@@ -879,6 +906,7 @@ private:
   StringRef NameOfWrappedPass;
   DebugInfoPerPass *DebugInfoBeforePass;
   enum DebugifyMode Mode;
+  StringRef MetadataKind;
 };
 
 /// ModulePass for checking debug info inserted by -debugify, used with the
@@ -888,12 +916,17 @@ struct CheckDebugifyModulePass : public ModulePass {
     bool Result;
     if (Mode == DebugifyMode::SyntheticDebugInfo)
       Result = checkDebugifyMetadata(M, M.functions(), NameOfWrappedPass,
-                                   "CheckModuleDebugify", Strip, StatsMap);
+                                     "CheckModuleDebugify", Strip, StatsMap);
+    else if (Mode == DebugifyMode::OriginalDebugInfo)
+      Result = checkDebugInfoMetadata(
+          M, M.functions(), *DebugInfoBeforePass,
+          "CheckModuleDebugify (original debuginfo)", NameOfWrappedPass,
+          OrigDIVerifyBugsReportFilePath);
     else
       Result = checkDebugInfoMetadata(
-        M, M.functions(), *DebugInfoBeforePass,
-        "CheckModuleDebugify (original debuginfo)", NameOfWrappedPass,
-        OrigDIVerifyBugsReportFilePath);
+          M, M.functions(), *DebugInfoBeforePass,
+          "CheckModuleDebugify (original metadata)", NameOfWrappedPass,
+          OrigDIVerifyBugsReportFilePath, MetadataKind);
 
     return Result;
   }
@@ -903,11 +936,12 @@ struct CheckDebugifyModulePass : public ModulePass {
       DebugifyStatsMap *StatsMap = nullptr,
       enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
       DebugInfoPerPass *DebugInfoBeforePass = nullptr,
-      StringRef OrigDIVerifyBugsReportFilePath = "")
+      StringRef OrigDIVerifyBugsReportFilePath = "",
+      StringRef MetadataKind = "dbg")
       : ModulePass(ID), NameOfWrappedPass(NameOfWrappedPass),
         OrigDIVerifyBugsReportFilePath(OrigDIVerifyBugsReportFilePath),
-        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode),
-        Strip(Strip) {}
+        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass),
+        Mode(Mode), Strip(Strip), MetadataKind(MetadataKind) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
@@ -922,6 +956,7 @@ private:
   DebugInfoPerPass *DebugInfoBeforePass;
   enum DebugifyMode Mode;
   bool Strip;
+  StringRef MetadataKind;
 };
 
 /// FunctionPass for checking debug info inserted by -debugify-function, used
@@ -933,13 +968,18 @@ struct CheckDebugifyFunctionPass : public FunctionPass {
     bool Result;
     if (Mode == DebugifyMode::SyntheticDebugInfo)
       Result = checkDebugifyMetadata(M, make_range(FuncIt, std::next(FuncIt)),
-                                   NameOfWrappedPass, "CheckFunctionDebugify",
-                                   Strip, StatsMap);
+                                     NameOfWrappedPass, "CheckFunctionDebugify",
+                                     Strip, StatsMap);
+    else if (Mode == DebugifyMode::OriginalDebugInfo)
+      Result = checkDebugInfoMetadata(
+          M, make_range(FuncIt, std::next(FuncIt)), *DebugInfoBeforePass,
+          "CheckFunctionDebugify (original debuginfo)", NameOfWrappedPass,
+          OrigDIVerifyBugsReportFilePath);
     else
       Result = checkDebugInfoMetadata(
-        M, make_range(FuncIt, std::next(FuncIt)), *DebugInfoBeforePass,
-        "CheckFunctionDebugify (original debuginfo)", NameOfWrappedPass,
-        OrigDIVerifyBugsReportFilePath);
+          M, make_range(FuncIt, std::next(FuncIt)), *DebugInfoBeforePass,
+          "CheckFunctionDebugify (original metadata)", NameOfWrappedPass,
+          OrigDIVerifyBugsReportFilePath, MetadataKind);
 
     return Result;
   }
@@ -949,11 +989,12 @@ struct CheckDebugifyFunctionPass : public FunctionPass {
       DebugifyStatsMap *StatsMap = nullptr,
       enum DebugifyMode Mode = DebugifyMode::SyntheticDebugInfo,
       DebugInfoPerPass *DebugInfoBeforePass = nullptr,
-      StringRef OrigDIVerifyBugsReportFilePath = "")
+      StringRef OrigDIVerifyBugsReportFilePath = "",
+      StringRef MetadataKind = "dbg")
       : FunctionPass(ID), NameOfWrappedPass(NameOfWrappedPass),
         OrigDIVerifyBugsReportFilePath(OrigDIVerifyBugsReportFilePath),
-        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode),
-        Strip(Strip) {}
+        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass),
+        Mode(Mode), Strip(Strip), MetadataKind(MetadataKind) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
@@ -968,6 +1009,7 @@ private:
   DebugInfoPerPass *DebugInfoBeforePass;
   enum DebugifyMode Mode;
   bool Strip;
+  StringRef MetadataKind;
 };
 
 } // end anonymous namespace
@@ -995,31 +1037,45 @@ void llvm::exportDebugifyStats(StringRef Path, const DebugifyStatsMap &Map) {
 
 ModulePass *createDebugifyModulePass(enum DebugifyMode Mode,
                                      llvm::StringRef NameOfWrappedPass,
-                                     DebugInfoPerPass *DebugInfoBeforePass) {
+                                     DebugInfoPerPass *DebugInfoBeforePass,
+                                     StringRef MetadataKind) {
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     return new DebugifyModulePass();
-  assert(Mode == DebugifyMode::OriginalDebugInfo && "Must be original mode");
-  return new DebugifyModulePass(Mode, NameOfWrappedPass, DebugInfoBeforePass);
+  else if (Mode == DebugifyMode::OriginalDebugInfo)
+    return new DebugifyModulePass(Mode, NameOfWrappedPass, DebugInfoBeforePass);
+  assert(Mode == DebugifyMode::OriginalMetadata &&
+         "Must be original metadata mode");
+  return new DebugifyModulePass(Mode, NameOfWrappedPass, DebugInfoBeforePass,
+                                MetadataKind);
 }
 
-FunctionPass *
-createDebugifyFunctionPass(enum DebugifyMode Mode,
-                           llvm::StringRef NameOfWrappedPass,
-                           DebugInfoPerPass *DebugInfoBeforePass) {
+FunctionPass *createDebugifyFunctionPass(enum DebugifyMode Mode,
+                                         llvm::StringRef NameOfWrappedPass,
+                                         DebugInfoPerPass *DebugInfoBeforePass,
+                                         StringRef MetadataKind) {
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     return new DebugifyFunctionPass();
-  assert(Mode == DebugifyMode::OriginalDebugInfo && "Must be original mode");
-  return new DebugifyFunctionPass(Mode, NameOfWrappedPass, DebugInfoBeforePass);
+  else if (Mode == DebugifyMode::OriginalDebugInfo)
+    return new DebugifyFunctionPass(Mode, NameOfWrappedPass,
+                                    DebugInfoBeforePass);
+  assert(Mode == DebugifyMode::OriginalMetadata &&
+         "Must be original metadata mode");
+  return new DebugifyFunctionPass(Mode, NameOfWrappedPass, DebugInfoBeforePass,
+                                  MetadataKind);
 }
 
 PreservedAnalyses NewPMDebugifyPass::run(Module &M, ModuleAnalysisManager &) {
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     applyDebugifyMetadata(M, M.functions(),
                           "ModuleDebugify: ", /*ApplyToMF*/ nullptr);
-  else
+  else if (Mode == DebugifyMode::OriginalDebugInfo)
     collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
                              "ModuleDebugify (original debuginfo)",
-                              NameOfWrappedPass);
+                             NameOfWrappedPass);
+  else
+    collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                             "ModuleDebugify (original metadata)",
+                             NameOfWrappedPass, MetadataKind);
 
   PreservedAnalyses PA;
   PA.preserveSet<CFGAnalyses>();
@@ -1029,25 +1085,35 @@ PreservedAnalyses NewPMDebugifyPass::run(Module &M, ModuleAnalysisManager &) {
 ModulePass *createCheckDebugifyModulePass(
     bool Strip, StringRef NameOfWrappedPass, DebugifyStatsMap *StatsMap,
     enum DebugifyMode Mode, DebugInfoPerPass *DebugInfoBeforePass,
-    StringRef OrigDIVerifyBugsReportFilePath) {
+    StringRef OrigDIVerifyBugsReportFilePath, StringRef MetadataKind) {
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     return new CheckDebugifyModulePass(Strip, NameOfWrappedPass, StatsMap);
-  assert(Mode == DebugifyMode::OriginalDebugInfo && "Must be original mode");
-  return new CheckDebugifyModulePass(false, NameOfWrappedPass, nullptr, Mode,
-                                     DebugInfoBeforePass,
-                                     OrigDIVerifyBugsReportFilePath);
+  else if (Mode == DebugifyMode::OriginalDebugInfo)
+    return new CheckDebugifyModulePass(false, NameOfWrappedPass, nullptr, Mode,
+                                       DebugInfoBeforePass,
+                                       OrigDIVerifyBugsReportFilePath);
+  assert(Mode == DebugifyMode::OriginalMetadata &&
+         "Must be original metadata mode");
+  return new CheckDebugifyModulePass(
+      false, NameOfWrappedPass, nullptr, Mode, DebugInfoBeforePass,
+      OrigDIVerifyBugsReportFilePath, MetadataKind);
 }
 
 FunctionPass *createCheckDebugifyFunctionPass(
     bool Strip, StringRef NameOfWrappedPass, DebugifyStatsMap *StatsMap,
     enum DebugifyMode Mode, DebugInfoPerPass *DebugInfoBeforePass,
-    StringRef OrigDIVerifyBugsReportFilePath) {
+    StringRef OrigDIVerifyBugsReportFilePath, StringRef MetadataKind) {
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     return new CheckDebugifyFunctionPass(Strip, NameOfWrappedPass, StatsMap);
-  assert(Mode == DebugifyMode::OriginalDebugInfo && "Must be original mode");
-  return new CheckDebugifyFunctionPass(false, NameOfWrappedPass, nullptr, Mode,
-                                       DebugInfoBeforePass,
-                                       OrigDIVerifyBugsReportFilePath);
+  else if (Mode == DebugifyMode::OriginalDebugInfo)
+    return new CheckDebugifyFunctionPass(false, NameOfWrappedPass, nullptr,
+                                         Mode, DebugInfoBeforePass,
+                                         OrigDIVerifyBugsReportFilePath);
+  assert(Mode == DebugifyMode::OriginalMetadata &&
+         "Must be original metadata mode");
+  return new CheckDebugifyFunctionPass(
+      false, NameOfWrappedPass, nullptr, Mode, DebugInfoBeforePass,
+      OrigDIVerifyBugsReportFilePath, MetadataKind);
 }
 
 PreservedAnalyses NewPMCheckDebugifyPass::run(Module &M,
@@ -1058,12 +1124,16 @@ PreservedAnalyses NewPMCheckDebugifyPass::run(Module &M,
 
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     checkDebugifyMetadata(M, M.functions(), NameOfWrappedPass,
-                                   "CheckModuleDebugify", Strip, StatsMap);
+                          "CheckModuleDebugify", Strip, StatsMap);
+  else if (Mode == DebugifyMode::OriginalDebugInfo)
+    checkDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                           "CheckModuleDebugify (original debuginfo)",
+                           NameOfWrappedPass, OrigDIVerifyBugsReportFilePath);
   else
-    checkDebugInfoMetadata(
-      M, M.functions(), *DebugInfoBeforePass,
-      "CheckModuleDebugify (original debuginfo)", NameOfWrappedPass,
-      OrigDIVerifyBugsReportFilePath);
+    checkDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                           "CheckModuleDebugify (original metadata)",
+                           NameOfWrappedPass, OrigDIVerifyBugsReportFilePath,
+                           MetadataKind);
 
   if (NewDebugMode)
     M.convertToNewDbgValues();
@@ -1087,50 +1157,59 @@ void DebugifyEachInstrumentation::registerCallbacks(
     PA.preserveSet<CFGAnalyses>();
     if (const auto **CF = llvm::any_cast<const Function *>(&IR)) {
       Function &F = *const_cast<Function *>(*CF);
-      applyDebugify(F, Mode, DebugInfoBeforePass, P);
+      applyDebugify(F, Mode, DebugInfoBeforePass, P, MetadataKind);
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(*F.getParent())
           .getManager()
           .invalidate(F, PA);
     } else if (const auto **CM = llvm::any_cast<const Module *>(&IR)) {
       Module &M = *const_cast<Module *>(*CM);
-      applyDebugify(M, Mode, DebugInfoBeforePass, P);
+      applyDebugify(M, Mode, DebugInfoBeforePass, P, MetadataKind);
       MAM.invalidate(M, PA);
     }
   });
-  PIC.registerAfterPassCallback(
-      [this, &MAM](StringRef P, Any IR, const PreservedAnalyses &PassPA) {
-        if (isIgnoredPass(P))
-          return;
-        PreservedAnalyses PA;
-        PA.preserveSet<CFGAnalyses>();
-        if (const auto **CF = llvm::any_cast<const Function *>(&IR)) {
-          auto &F = *const_cast<Function *>(*CF);
-          Module &M = *F.getParent();
-          auto It = F.getIterator();
-          if (Mode == DebugifyMode::SyntheticDebugInfo)
-            checkDebugifyMetadata(M, make_range(It, std::next(It)), P,
-                                  "CheckFunctionDebugify", /*Strip=*/true,
-                                  DIStatsMap);
-          else
-            checkDebugInfoMetadata(M, make_range(It, std::next(It)),
-                                   *DebugInfoBeforePass,
-                                   "CheckModuleDebugify (original debuginfo)",
-                                   P, OrigDIVerifyBugsReportFilePath);
-          MAM.getResult<FunctionAnalysisManagerModuleProxy>(*F.getParent())
-              .getManager()
-              .invalidate(F, PA);
-        } else if (const auto **CM = llvm::any_cast<const Module *>(&IR)) {
-          Module &M = *const_cast<Module *>(*CM);
-          if (Mode == DebugifyMode::SyntheticDebugInfo)
-            checkDebugifyMetadata(M, M.functions(), P, "CheckModuleDebugify",
-                                  /*Strip=*/true, DIStatsMap);
-          else
-            checkDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
-                                   "CheckModuleDebugify (original debuginfo)",
-                                   P, OrigDIVerifyBugsReportFilePath);
-          MAM.invalidate(M, PA);
-        }
-      });
+  PIC.registerAfterPassCallback([this, &MAM](StringRef P, Any IR,
+                                             const PreservedAnalyses &PassPA) {
+    if (isIgnoredPass(P))
+      return;
+    PreservedAnalyses PA;
+    PA.preserveSet<CFGAnalyses>();
+    if (const auto **CF = llvm::any_cast<const Function *>(&IR)) {
+      auto &F = *const_cast<Function *>(*CF);
+      Module &M = *F.getParent();
+      auto It = F.getIterator();
+      if (Mode == DebugifyMode::SyntheticDebugInfo)
+        checkDebugifyMetadata(M, make_range(It, std::next(It)), P,
+                              "CheckFunctionDebugify", /*Strip=*/true,
+                              DIStatsMap);
+      else if (Mode == DebugifyMode::OriginalDebugInfo)
+        checkDebugInfoMetadata(M, make_range(It, std::next(It)),
+                               *DebugInfoBeforePass,
+                               "CheckModuleDebugify (original debuginfo)", P,
+                               OrigDIVerifyBugsReportFilePath);
+      else
+        checkDebugInfoMetadata(M, make_range(It, std::next(It)),
+                               *DebugInfoBeforePass,
+                               "CheckModuleDebugify (original metadata)", P,
+                               OrigDIVerifyBugsReportFilePath, MetadataKind);
+      MAM.getResult<FunctionAnalysisManagerModuleProxy>(*F.getParent())
+          .getManager()
+          .invalidate(F, PA);
+    } else if (const auto **CM = llvm::any_cast<const Module *>(&IR)) {
+      Module &M = *const_cast<Module *>(*CM);
+      if (Mode == DebugifyMode::SyntheticDebugInfo)
+        checkDebugifyMetadata(M, M.functions(), P, "CheckModuleDebugify",
+                              /*Strip=*/true, DIStatsMap);
+      else if (Mode == DebugifyMode::OriginalDebugInfo)
+        checkDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                               "CheckModuleDebugify (original debuginfo)", P,
+                               OrigDIVerifyBugsReportFilePath);
+      else
+        checkDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                               "CheckModuleDebugify (original metadata)", P,
+                               OrigDIVerifyBugsReportFilePath, MetadataKind);
+      MAM.invalidate(M, PA);
+    }
+  });
 }
 
 char DebugifyModulePass::ID = 0;
